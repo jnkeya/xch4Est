@@ -1,0 +1,198 @@
+"""
+@By JK. yixi
+@create date 2024-07-12 22:08:05
+"""
+import os
+import glob
+import pandas as pd
+import numpy as np
+import h5py
+import warnings
+
+# 경고 무시 설정
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# Setting paths
+path_data = '/share/geosat-4/GOSAT/Bias_corrected/'
+path_save = '/share/air-3/XCH4_Estimation/data/colocation/GOSAT/'
+
+# Initialize dictionary to store GOSAT data
+variables = {
+    "aerosolOpticalThickness1": [], "aerosolOpticalThickness2": [], "aerosolOpticalThickness3": [], 
+    "aerosolOpticalThicknessTotal": [], "cirrusOpticalThickness": [], "cirrusTopPressure": [],
+    "dryAirTotalColumn": [], "surfaceAlbedo_layer1": [], "surfaceAlbedo_layer2": [], 
+    "surfaceAlbedo_layer3": [], "surfaceAlbedo_layer4": [], "surfaceAlbedo_layer5": [], 
+    "surfaceAlbedo_layer6": [], "surfaceAlbedo_layer7": [], "surfaceAlbedo_layer8": [], 
+    "surfaceAlbedo_layer9": [], "surfaceAlbedo_layer10": [], "surfaceAlbedo_layer11": [], 
+    "surfaceAlbedo_layer12": [], "surfaceAlbedo_layer13": [], "surfaceAlbedo_layer14": [], 
+    "surfaceAlbedo_layer15": [], "surfaceAlbedo_layer16": [], "surfaceAlbedo_layer17": [], 
+    "surfaceAlbedo_layer18": [], "surfaceAlbedo_layer19": [], "surfaceAlbedo_layer20": [], 
+    "surfaceAlbedo_layer21": [], "surfaceAlbedo_layer22": [], "surfaceAlbedo_layer23": [], 
+    "surfaceAlbedo_layer24": [], "surfaceAlbedo_layer25": [], "surfaceAlbedo_layer26": [], 
+    "surfaceAlbedo_total": [], "surfacePressure": [], "airMass": [], "height": [], "landFraction": [], 
+    "latitude": [], "longitude": [], "satelliteAttitude_layer1": [], "satelliteAttitude_layer2": [], 
+    "satelliteAttitude_layer3": [], "satelliteAttitude_layer4": [], "satelliteAttitude_total": [], 
+    "satelliteAzimuth": [], "satellitePosition_layer1": [], "satellitePosition_layer2": [], 
+    "satellitePosition_layer3": [], "satellitePosition_total": [], "satelliteZenith": [], 
+    "solarAzimuth": [], "solarZenith": [], "sunglintFlag": [], "XCH4": [], "XCH4BiasCorrected": [], 
+    "XCH4BiasCorrectedError": [], "XCH4InterferenceError": [], 
+    "XCH4RetrievalNoise": [], "XCH4SmoothingError": [], "CH4DFS": [], 
+    "residualMeanSquare_layer1": [], "residualMeanSquare_layer2": [], 
+    "residualMeanSquare_layer3": [], "residualMeanSquare_layer4": [], 
+    "residualMeanSquare_layer5": [], "residualMeanSquare_total": [], 
+    "CH4TotalColumn": [], "CH4TotalColumnInterferenceError": [], 
+    "CH4TotalColumnRetrievalNoise": [], "CH4TotalColumnSmoothingError": [], 
+    "surfacePressureDifference": [], "temperatureShift": [], 
+    "XH2O": [], "Ref_aerosolOpticalThickness": [], "Ref_CH4Profile": [], 
+    "Ref_cirrusOpticalThickness": [], "Ref_cirrusTopPressure": [], 
+    "Ref_dryAirPartialColumn": [], "Ref_surfaceAlbedo_layer1": [], 
+    "Ref_surfaceAlbedo_layer2": [], "Ref_surfaceAlbedo_layer3": [], 
+    "Ref_surfaceAlbedo_layer4": [], "Ref_surfaceAlbedo_layer5": [], "Ref_surfaceAlbedo_total": [], 
+    "Ref_surfacePressure": [], "Ref_surfaceWindSpeed": [], "Ref_temperatureProfile": [], 
+    "Ref_waterVaporProfile": [], "Ref_XCH4": [], "time": [],
+    "chi2": [], "columnAveragingKernel_layer1": [], "columnAveragingKernel_layer2": [],
+    "columnAveragingKernel_layer3": [], "columnAveragingKernel_layer4": [],
+    "columnAveragingKernel_layer5": [], "columnAveragingKernel_layer6": [],
+    "columnAveragingKernel_layer7": [], "columnAveragingKernel_layer8": [],
+    "columnAveragingKernel_layer9": [], "columnAveragingKernel_layer10": [],
+    "columnAveragingKernel_layer11": [], "columnAveragingKernel_layer12": [],
+    "columnAveragingKernel_layer13": [], "columnAveragingKernel_layer14": [],
+    "columnAveragingKernel_layer15": [], "prsRefLevel": []
+}
+
+# Function to process aerosolOpticalThickness with filtering
+def process_aerosolOpticalThickness(aot_data):
+    invalid_value = -9999.0
+    valid_range = (0.0, 100.0)
+    aot_data = np.where(aot_data == invalid_value, np.nan, aot_data)
+    aot_data = np.where((aot_data < valid_range[0]) | (aot_data > valid_range[1]), np.nan, aot_data)
+    aot_layers = [np.nanmean(aot_data[:, :, i], axis=1) for i in range(aot_data.shape[2])]
+    aot_total = np.nanmean(aot_data, axis=(1, 2))
+    return aot_layers + [aot_total]
+
+# General function to filter data
+def filter_data(data, invalid_value, valid_range):
+    data = np.where(data == invalid_value, np.nan, data)
+    data = np.where((data < valid_range[0]) | (data > valid_range[1]), np.nan, data)
+    return data
+
+# Function to process and extend data into variables dictionary with filtering
+def process_and_extend(data, variable_name, layers=None, multiplier=1, invalid_value=None, valid_range=None):
+    if invalid_value is not None and valid_range is not None:
+        data = filter_data(data, invalid_value, valid_range)
+    if layers is None:
+        variables[variable_name].extend(data * multiplier)
+    else:
+        layer_means = []
+        for j in range(layers):
+            layer_data = data[:, j] * multiplier
+            variables[f"{variable_name}_layer{j+1}"].extend(layer_data)
+            layer_means.append(layer_data)
+        layer_mean_total = np.nanmean(layer_means, axis=0)
+        variables[f"{variable_name}_total"].extend(layer_mean_total)
+
+# Process each year's data
+years = [2020, 2021, 2022, 2023]
+for year in years:
+    print(f"Processing GOSAT files for year {year}...")
+    year_path = os.path.join(path_data, str(year))
+    files = sorted(glob.glob(os.path.join(year_path, '*.h5')))
+    total_files = len(files)
+    for i, file in enumerate(files, start=1):
+        print(f"Processing file {i}/{total_files}: {file}")
+        if not os.path.exists(file):
+            print(f"File does not exist: {file}")
+            continue
+        try:
+            with h5py.File(file, 'r') as f:
+                ds_aux = f['/Data/auxiliaryParameter']
+                process_and_extend(ds_aux['cirrusOpticalThickness'][:], "cirrusOpticalThickness", invalid_value=-9999.0, valid_range=(0.0, 100.0))
+                process_and_extend(ds_aux['cirrusTopPressure'][:], "cirrusTopPressure", invalid_value=-9999.0, valid_range=(0.0, 1200.0))
+                process_and_extend(ds_aux['dryAirTotalColumn'][:], "dryAirTotalColumn", invalid_value=-1e30, valid_range=(0.0, 3e25))
+                process_and_extend(ds_aux['surfaceAlbedo'][:], "surfaceAlbedo", layers=26, invalid_value=-9999.0, valid_range=(0.0, 2.0))
+                process_and_extend(ds_aux['surfacePressure'][:], "surfacePressure", invalid_value=-9999.0, valid_range=(0.0, 1200.0))
+                aot_data = ds_aux['aerosolOpticalThickness'][:]
+                aot_processed = process_aerosolOpticalThickness(aot_data)
+                for k, aot in enumerate(aot_processed):
+                    variables[f"aerosolOpticalThickness{k+1 if k < 3 else 'Total'}"].extend(aot)
+                ds_geo = f['/Data/geolocation']
+                process_and_extend(ds_geo['airMass'][:], "airMass", invalid_value=-9999.0, valid_range=(2.0, 100.0))
+                process_and_extend(ds_geo['height'][:], "height", invalid_value=-9999.0, valid_range=(-407.0, 8752.0))
+                process_and_extend(ds_geo['landFraction'][:], "landFraction", invalid_value=-9999.0, valid_range=(0.0, 100.0))
+                process_and_extend(ds_geo['latitude'][:], "latitude", invalid_value=-9999.0, valid_range=(-90.0, 90.0))
+                process_and_extend(ds_geo['longitude'][:], "longitude", invalid_value=-9999.0, valid_range=(-180.0, 180.0))
+                process_and_extend(ds_geo['satelliteAttitude'][:], "satelliteAttitude", layers=4, invalid_value=-9999.0, valid_range=(-1.0, 1.0))
+                process_and_extend(ds_geo['satelliteAzimuth'][:], "satelliteAzimuth", invalid_value=-9999.0, valid_range=(0.0, 360.0))
+                process_and_extend(ds_geo['satellitePosition'][:], "satellitePosition", layers=3, invalid_value=-9999.0, valid_range=(-8e3, 8e3))
+                process_and_extend(ds_geo['satelliteZenith'][:], "satelliteZenith", invalid_value=-9999.0, valid_range=(0.0, 180.0))
+                process_and_extend(ds_geo['solarAzimuth'][:], "solarAzimuth", invalid_value=-9999.0, valid_range=(0.0, 360.0))
+                process_and_extend(ds_geo['solarZenith'][:], "solarZenith", invalid_value=-9999.0, valid_range=(0.0, 180.0))
+                process_and_extend(ds_geo['sunglintFlag'][:], "sunglintFlag")
+                ds_mix = f['/Data/mixingRatio']
+                process_and_extend(ds_mix['XCH4'][:], "XCH4", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 10.0))
+                process_and_extend(ds_mix['XCH4BiasCorrected'][:], "XCH4BiasCorrected", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 3.0))
+                process_and_extend(ds_mix['XCH4BiasCorrectedError'][:], "XCH4BiasCorrectedError", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 3.0))
+                process_and_extend(ds_mix['XCH4InterferenceError'][:], "XCH4InterferenceError", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 3.0))
+                process_and_extend(ds_mix['XCH4RetrievalNoise'][:], "XCH4RetrievalNoise", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 3.0))
+                process_and_extend(ds_mix['XCH4SmoothingError'][:], "XCH4SmoothingError", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 3.0))
+                ds_ret = f['/Data/retrievalQuality']
+                process_and_extend(ds_ret['CH4DFS'][:], "CH4DFS")
+                process_and_extend(ds_ret['residualMeanSquare'][:], "residualMeanSquare", layers=5)
+                process_and_extend(ds_ret['chi2'][:], "chi2", invalid_value=-9999.0, valid_range=(0.0, np.inf))
+                columnAveragingKernel_data = ds_ret['columnAveragingKernel'][:]
+                for j in range(columnAveragingKernel_data.shape[1]):
+                    variables[f"columnAveragingKernel_layer{j+1}"].extend(columnAveragingKernel_data[:, j])
+                ds_tot = f['/Data/totalColumn']
+                process_and_extend(ds_tot['CH4TotalColumn'][:], "CH4TotalColumn", multiplier=1e3, invalid_value=-1e30, valid_range=(0.0, 1e21))
+                process_and_extend(ds_tot['CH4TotalColumnInterferenceError'][:], "CH4TotalColumnInterferenceError", multiplier=1e3, invalid_value=-1e30, valid_range=(0.0, 3e20))
+                process_and_extend(ds_tot['CH4TotalColumnRetrievalNoise'][:], "CH4TotalColumnRetrievalNoise", multiplier=1e3, invalid_value=-1e30, valid_range=(0.0, 3e20))
+                process_and_extend(ds_tot['CH4TotalColumnSmoothingError'][:], "CH4TotalColumnSmoothingError", multiplier=1e3, invalid_value=-1e30, valid_range=(0.0, 3e20))
+                ds_bias = f['/scanAttribute/biasCorrectionUsedData']
+                process_and_extend(ds_bias['surfacePressureDifference'][:], "surfacePressureDifference", invalid_value=-9999.0, valid_range=(-1200.0, 1200.0))
+                process_and_extend(ds_bias['temperatureShift'][:], "temperatureShift", invalid_value=-9999.0, valid_range=(-120.0, 120.0))
+                process_and_extend(ds_bias['XH2O'][:], "XH2O", multiplier=1e3, invalid_value=-9999.0, valid_range=(0.0, 100000.0))
+                ds_ref = f['/scanAttribute/referenceData']
+                ref_aot_data = ds_ref['aerosolOpticalThickness'][:]
+                ref_aot_data = filter_data(ref_aot_data, -9999.0, (0.0, 100.0))
+                variables["Ref_aerosolOpticalThickness"].extend(np.nanmean(ref_aot_data, axis=(1, 2)))
+                ref_ch4_profile = ds_ref['CH4Profile'][:]
+                ref_ch4_profile = filter_data(ref_ch4_profile, -9999.0, (0.0, 5.0))
+                variables["Ref_CH4Profile"].extend(np.nanmean(ref_ch4_profile, axis=1))
+                process_and_extend(ds_ref['cirrusOpticalThickness'][:], "Ref_cirrusOpticalThickness")
+                process_and_extend(ds_ref['cirrusTopPressure'][:], "Ref_cirrusTopPressure")
+                ref_dry_air_partial_col = ds_ref['dryAirPartialColumn'][:]
+                ref_dry_air_partial_col = filter_data(ref_dry_air_partial_col, -1e30, (0.0, 3e24))
+                variables["Ref_dryAirPartialColumn"].extend(np.nanmean(ref_dry_air_partial_col, axis=1))
+                process_and_extend(ds_ref['surfaceAlbedo'][:], "Ref_surfaceAlbedo", layers=5, invalid_value=-9999.0, valid_range=(0.0, 1.0))
+                process_and_extend(ds_ref['surfacePressure'][:], "Ref_surfacePressure", invalid_value=-9999.0, valid_range=(300.0, 1100.0))
+                process_and_extend(ds_ref['surfaceWindSpeed'][:], "Ref_surfaceWindSpeed", invalid_value=-9999.0, valid_range=(0.0, 100.0))
+                ref_temp_profile = ds_ref['temperatureProfile'][:]
+                ref_temp_profile = filter_data(ref_temp_profile, -9999.0, (150.0, 350.0))
+                variables["Ref_temperatureProfile"].extend(np.nanmean(ref_temp_profile, axis=1))
+                ref_water_vapor_profile = ds_ref['waterVaporProfile'][:]
+                ref_water_vapor_profile = filter_data(ref_water_vapor_profile, -9999.0, (0.0, 50000.0))
+                variables["Ref_waterVaporProfile"].extend(np.nanmean(ref_water_vapor_profile, axis=1))
+                ref_xch4 = ds_ref['XCH4'][:]
+                ref_xch4 = filter_data(ref_xch4, -9999.0, (0.0, 10.0))
+                variables["Ref_XCH4"].extend(ref_xch4 * 1e3)
+                ds_anc = f['/ancillary/FTSL2DataInformation']
+                process_and_extend(ds_anc['prsRefLevel'][:], "prsRefLevel", invalid_value=-9999.0, valid_range=(0.0, 1200.0))
+                ds_scan = f['/scanAttribute/']
+                time_strings = [bytes.decode(t) for t in ds_scan['time'][:]]
+                variables["time"].extend(pd.to_datetime(time_strings, format="%Y-%m-%d %H:%M:%S.%f"))
+        except Exception as e:
+            print(f"Error processing file {file}: {e}")
+            continue
+# Ensure all lists in variables have the same length
+max_len = max(len(lst) for lst in variables.values())
+for key in variables:
+    if len(variables[key]) < max_len:
+        variables[key].extend([np.nan] * (max_len - len(variables[key])))
+
+# Convert to DataFrame
+df_gosat = pd.DataFrame(variables)
+
+# Save to CSV
+output_file = os.path.join(path_save, 'GOSAT_allParams_2020to2023_new.csv')
+df_gosat.to_csv(output_file, index=False)
+print(f"CSV file saved successfully to: {output_file}")
