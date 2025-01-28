@@ -1,0 +1,440 @@
+##"""@yixi"""
+##________Date : 14-Jan-2025
+## TROPOMI Data Extraction and Saving to HDF5 ##
+import os
+import glob
+import time
+import numpy as np
+import xarray as xr
+import h5py
+import warnings
+from pandas.errors import PerformanceWarning
+
+warnings.filterwarnings("ignore", category=PerformanceWarning)
+
+#%% Setting paths
+path_work = '/share/air-3/XCH4_Estimation/'
+path_data = path_work + 'data/'
+path_raw2 = '/share/geosat-4/'
+save_path = path_data + 'TROPOMI_H5/'
+
+# Ensure save directory exists
+os.makedirs(save_path, exist_ok=True)
+
+def process_file(filename):
+    
+    print(f"Processing file: {filename}")  # Log the current file being processed
+
+    tropomi_data = {
+        "time": [], 
+        "xch4": [], 
+        "xch4_bc": [], 
+        "xch4_precision": [], 
+        "xch4_qf": [], 
+        "lat": [], 
+        "lon": [], 
+        "fluorescence": [], 
+        "co": [], 
+        "co_precision": [], 
+        "h2o": [], 
+        "h2o_precision": [], 
+        "aerosol_size": [],
+        "aerosol_size_precision": [], 
+        "aerosol_height": [], 
+        "aerosol_height_precision": [], 
+        "aerosol_column": [],
+        "aerosol_column_precision": [], 
+        "surf_albedo_nir": [], 
+        "surf_albedo_nir_precision": [], 
+        "surf_albedo_swir": [],
+        "surf_albedo_swir_precision": [],
+        "aot_nir": [],
+        "aot_swir": [],
+        "chi_nir": [],
+        "chi_swir": [],
+        "column_averaging_kernel_1": [],
+        "column_averaging_kernel_2": [],
+        "column_averaging_kernel_3": [],
+        "column_averaging_kernel_4": [],
+        "column_averaging_kernel_5": [],
+        "column_averaging_kernel_6": [],
+        "column_averaging_kernel_7": [],
+        "column_averaging_kernel_8": [],
+        "column_averaging_kernel_9": [],
+        "column_averaging_kernel_10": [],
+        "column_averaging_kernel_11": [],
+        "column_averaging_kernel_12": [],
+        "dfs": [],
+        "dfs_aerosol": [],
+        "dfs_methane": [],
+        "soz": [],
+        "soa": [],
+        "saz": [],
+        "saa": [],
+        "dry_air_subcolumn_1": [],
+        "dry_air_subcolumn_2": [],
+        "dry_air_subcolumn_3": [],
+        "dry_air_subcolumn_4": [],
+        "dry_air_subcolumn_5": [],
+        "dry_air_subcolumn_6": [],
+        "dry_air_subcolumn_7": [],
+        "dry_air_subcolumn_8": [],
+        "dry_air_subcolumn_9": [],
+        "dry_air_subcolumn_10": [],
+        "dry_air_subcolumn_11": [],
+        "dry_air_subcolumn_12": [],
+        "methane_profile_avg": [],
+        "methane_profile_1": [],
+        "methane_profile_2": [],
+        "methane_profile_3": [],
+        "methane_profile_4": [],
+        "methane_profile_5": [],
+        "methane_profile_6": [],
+        "methane_profile_7": [],
+        "methane_profile_8": [],
+        "methane_profile_9": [],
+        "methane_profile_10": [],
+        "methane_profile_11": [],
+        "methane_profile_12": [],
+        "methane_strong_column": [],
+        "methane_weak_column": [],
+        "u10": [],
+        "v10": [],
+        "pres_interval": [],
+        "cirrus_ref_nir": [],
+        "cirrus_ref_swir": [],
+        "alt": [],
+        "lc": []}
+
+    try:
+        t1 = time.time()
+
+        # Open the NetCDF file in the "PRODUCT" group
+        with xr.open_dataset(filename, group="PRODUCT") as ds: # (7)
+         utc = ds["time_utc"].values
+         xch4 = np.squeeze(ds["methane_mixing_ratio"].values)
+         xch4_bc = np.squeeze(ds["methane_mixing_ratio_bias_corrected"].values)
+         xch4_prec = np.squeeze(ds["methane_mixing_ratio_precision"].values)
+         xch4_qf = np.squeeze(ds["qa_value"].values)
+         lon = np.squeeze(ds["latitude"].values)
+         lat = np.squeeze(ds["longitude"].values)
+    
+         time_tmp = np.tile(utc.T,reps=[1, xch4.shape[1]]).ravel(order='C')
+         xch4_tmp = xch4.ravel(order='C')
+         xch4_bc_tmp = xch4_bc.ravel(order='C')
+         xch4_prec_tmp = xch4_prec.ravel(order='C')
+         xch4_qf_tmp = xch4_qf.ravel(order='C')
+         lon_tmp = lon.ravel(order='C')
+         lat_tmp = lat.ravel(order='C')
+
+        ## NaN value & Quality flag filtering
+        valid = ~np.isnan(xch4_tmp) & (xch4_qf_tmp > 0.5) # ATBD recomendation
+        # valid = ~np.isnan(xch4_tmp) & (xch4_qf_tmp== 1)
+
+        tropomi_data["time"] = np.append(tropomi_data["time"], time_tmp[valid])
+        tropomi_data["xch4"] = np.append(tropomi_data["xch4"], xch4_tmp[valid]) # (unit: ppb)
+        tropomi_data["xch4_bc"] = np.append(tropomi_data["xch4_bc"], xch4_bc_tmp[valid]) # (unit: ppb)
+        tropomi_data["xch4_precision"] = np.append(tropomi_data["xch4_precision"], xch4_prec_tmp[valid]) # (unit: ppb)
+        tropomi_data["xch4_qf"] = np.append(tropomi_data["xch4_qf"], xch4_qf_tmp[valid]) # varying between 0 (no data) and 1 (full quality data). Recommend to ignore data with qa_value < 0.5
+        tropomi_data["lat"] = np.append(tropomi_data["lat"], lon_tmp[valid])
+        tropomi_data["lon"] = np.append(tropomi_data["lon"], lat_tmp[valid])
+        # tropomi_data["time"] = pd.to_datetime(tropomi_data["time"]).tz_localize(None).values.astype("datetime64[ns]")
+        
+    # ds = xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/DETAILED_RESULTS")
+        with xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/DETAILED_RESULTS") as ds: # (19)
+         fluorescence = np.squeeze(ds["fluorescence"].values) # units = "mol s-1 m-2 nm-1 sr-1"
+         co = np.squeeze(ds["carbonmonoxide_total_column"].values) # unit: mol m-2
+         co_prec = np.squeeze(ds["carbonmonoxide_total_column_precision"].values) # unit: mol m-2
+         h2o = np.squeeze(ds["water_total_column"].values) # unit: mol m-2
+         h2o_prec = np.squeeze(ds["water_total_column_precision"].values) # unit: mol m-2
+         aerosol_size = np.squeeze(ds["aerosol_size"].values) 
+         aerosol_size_prec = np.squeeze(ds["aerosol_size_precision"].values) 
+         aerosol_height = np.squeeze(ds["aerosol_mid_altitude"].values) # unit: m
+         aerosol_height_prec = np.squeeze(ds["aerosol_mid_altitude_precision"].values) # unit: m
+         aerosol_column = np.squeeze(ds["aerosol_number_column"].values) # unit: "m-2"
+         aerosol_column_prec = np.squeeze(ds["aerosol_number_column_precision"].values)  # unit: "m-2"
+         surf_albedo_nir = np.squeeze(ds["surface_albedo_NIR"].values)  
+         surf_albedo_nir_prec = np.squeeze(ds["surface_albedo_NIR_precision"].values) 
+         surf_albedo_swir = np.squeeze(ds["surface_albedo_SWIR"].values)  
+         surf_albedo_swir_prec = np.squeeze(ds["surface_albedo_SWIR_precision"].values) 
+         aot_nir =  np.squeeze(ds["aerosol_optical_thickness_NIR"].values) 
+         aot_swir = np.squeeze(ds["aerosol_optical_thickness_SWIR"].values)
+         chi_nir =  np.squeeze(ds["chi_square_NIR"].values) 
+         chi_swir = np.squeeze(ds["chi_square_SWIR"].values)
+         column_averaging_kernel = np.squeeze(ds["column_averaging_kernel"].values)
+         column_averaging_kernel_1 = column_averaging_kernel[:,:,0]
+         column_averaging_kernel_2 = column_averaging_kernel[:,:,1]
+         column_averaging_kernel_3 = column_averaging_kernel[:,:,2]
+         column_averaging_kernel_4 = column_averaging_kernel[:,:,3]
+         column_averaging_kernel_5 = column_averaging_kernel[:,:,4]
+         column_averaging_kernel_6 = column_averaging_kernel[:,:,5]
+         column_averaging_kernel_7 = column_averaging_kernel[:,:,6]
+         column_averaging_kernel_8 = column_averaging_kernel[:,:,7]
+         column_averaging_kernel_9 = column_averaging_kernel[:,:,8]
+         column_averaging_kernel_10 = column_averaging_kernel[:,:,9]
+         column_averaging_kernel_11 = column_averaging_kernel[:,:,10]
+         column_averaging_kernel_12 = column_averaging_kernel[:,:,11]
+         dfs = np.squeeze(ds["degrees_of_freedom"].values) 
+         dfs_aerosol = np.squeeze(ds["degrees_of_freedom_aerosol"].values) 
+         dfs_methane = np.squeeze(ds["degrees_of_freedom_methane"].values) 
+        
+         fluorescence_tmp = fluorescence.ravel(order='C')
+         co_tmp = co.ravel(order='C')
+         co_prec_tmp = co_prec.ravel(order='C')
+         h2o_tmp = h2o.ravel(order='C')
+         h2o_prec_tmp = h2o_prec.ravel(order='C')
+         aerosol_size_tmp = aerosol_size.ravel(order='C')
+         aerosol_size_prec_tmp = aerosol_size_prec.ravel(order='C')
+         aerosol_height_tmp = aerosol_height.ravel(order='C')
+         aerosol_height_prec_tmp = aerosol_height_prec.ravel(order='C')
+         aerosol_column_tmp = aerosol_column.ravel(order='C')
+         aerosol_column_prec_tmp = aerosol_column_prec.ravel(order='C')
+         surf_albedo_nir_tmp = surf_albedo_nir.ravel(order='C')
+         surf_albedo_nir_prec_tmp = surf_albedo_nir_prec.ravel(order='C')
+         surf_albedo_swir_tmp = surf_albedo_swir.ravel(order='C')
+         surf_albedo_swir_prec_tmp = surf_albedo_swir_prec.ravel(order='C')
+         aot_nir_tmp = aot_nir.ravel(order='C')
+         aot_swir_tmp = aot_swir.ravel(order='C')
+         chi_nir_tmp = chi_nir.ravel(order='C')
+         chi_swir_tmp = chi_swir.ravel(order='C')
+         column_averaging_kernel_1_tmp = column_averaging_kernel_1.ravel(order='C')
+         column_averaging_kernel_2_tmp = column_averaging_kernel_2.ravel(order='C')
+         column_averaging_kernel_3_tmp = column_averaging_kernel_3.ravel(order='C')
+         column_averaging_kernel_4_tmp = column_averaging_kernel_4.ravel(order='C')
+         column_averaging_kernel_5_tmp = column_averaging_kernel_5.ravel(order='C')
+         column_averaging_kernel_6_tmp = column_averaging_kernel_6.ravel(order='C')
+         column_averaging_kernel_7_tmp = column_averaging_kernel_7.ravel(order='C')
+         column_averaging_kernel_8_tmp = column_averaging_kernel_8.ravel(order='C')
+         column_averaging_kernel_9_tmp = column_averaging_kernel_9.ravel(order='C')
+         column_averaging_kernel_10_tmp = column_averaging_kernel_10.ravel(order='C')
+         column_averaging_kernel_11_tmp = column_averaging_kernel_11.ravel(order='C')
+         column_averaging_kernel_12_tmp = column_averaging_kernel_12.ravel(order='C')
+         dfs_tmp = dfs.ravel(order='C')
+         dfs_aerosol_tmp = dfs_aerosol.ravel(order='C')
+         dfs_methane_tmp = dfs_methane.ravel(order='C')
+
+         tropomi_data["fluorescence"] = np.append(tropomi_data["fluorescence"], fluorescence_tmp[valid])
+         tropomi_data["co"] = np.append(tropomi_data["co"], co_tmp[valid])
+         tropomi_data["co_precision"] = np.append(tropomi_data["co_precision"], co_prec_tmp[valid])
+         tropomi_data["h2o"] = np.append(tropomi_data["h2o"], h2o_tmp[valid])
+         tropomi_data["h2o_precision"] = np.append(tropomi_data["h2o_precision"], h2o_prec_tmp[valid])
+         tropomi_data["aerosol_size"] = np.append(tropomi_data["aerosol_size"], aerosol_size_tmp[valid])
+         tropomi_data["aerosol_size_precision"] = np.append(tropomi_data["aerosol_size_precision"], aerosol_size_prec_tmp[valid])
+         tropomi_data["aerosol_height"] = np.append(tropomi_data["aerosol_height"], aerosol_height_tmp[valid])
+         tropomi_data["aerosol_height_precision"] = np.append(tropomi_data["aerosol_height_precision"], aerosol_height_prec_tmp[valid])
+         tropomi_data["aerosol_column"] = np.append(tropomi_data["aerosol_column"], aerosol_column_tmp[valid])
+         tropomi_data["aerosol_column_precision"] = np.append(tropomi_data["aerosol_column_precision"], aerosol_column_prec_tmp[valid])
+         tropomi_data["surf_albedo_nir"] = np.append(tropomi_data["surf_albedo_nir"], surf_albedo_nir_tmp[valid])
+         tropomi_data["surf_albedo_nir_precision"] = np.append(tropomi_data["surf_albedo_nir_precision"], surf_albedo_nir_prec_tmp[valid])
+         tropomi_data["surf_albedo_swir"] = np.append(tropomi_data["surf_albedo_swir"], surf_albedo_swir_tmp[valid])
+         tropomi_data["surf_albedo_swir_precision"] = np.append(tropomi_data["surf_albedo_swir_precision"], surf_albedo_swir_prec_tmp[valid])
+         tropomi_data["aot_nir"] = np.append(tropomi_data["aot_nir"], aot_nir_tmp[valid])
+         tropomi_data["aot_swir"] = np.append(tropomi_data["aot_swir"], aot_swir_tmp[valid])
+         tropomi_data["chi_nir"] = np.append(tropomi_data["chi_nir"], chi_nir_tmp[valid])
+         tropomi_data["chi_swir"] = np.append(tropomi_data["chi_swir"], chi_swir_tmp[valid])
+         tropomi_data["column_averaging_kernel_1"] = np.append(tropomi_data["column_averaging_kernel_1"], column_averaging_kernel_1_tmp[valid])
+         tropomi_data["column_averaging_kernel_2"] = np.append(tropomi_data["column_averaging_kernel_2"], column_averaging_kernel_2_tmp[valid])
+         tropomi_data["column_averaging_kernel_3"] = np.append(tropomi_data["column_averaging_kernel_3"], column_averaging_kernel_3_tmp[valid])
+         tropomi_data["column_averaging_kernel_4"] = np.append(tropomi_data["column_averaging_kernel_4"], column_averaging_kernel_4_tmp[valid])
+         tropomi_data["column_averaging_kernel_5"] = np.append(tropomi_data["column_averaging_kernel_5"], column_averaging_kernel_5_tmp[valid])
+         tropomi_data["column_averaging_kernel_6"] = np.append(tropomi_data["column_averaging_kernel_6"], column_averaging_kernel_6_tmp[valid])
+         tropomi_data["column_averaging_kernel_7"] = np.append(tropomi_data["column_averaging_kernel_7"], column_averaging_kernel_7_tmp[valid])
+         tropomi_data["column_averaging_kernel_8"] = np.append(tropomi_data["column_averaging_kernel_8"], column_averaging_kernel_8_tmp[valid])
+         tropomi_data["column_averaging_kernel_9"] = np.append(tropomi_data["column_averaging_kernel_9"], column_averaging_kernel_9_tmp[valid])
+         tropomi_data["column_averaging_kernel_10"] = np.append(tropomi_data["column_averaging_kernel_10"], column_averaging_kernel_10_tmp[valid])
+         tropomi_data["column_averaging_kernel_11"] = np.append(tropomi_data["column_averaging_kernel_11"], column_averaging_kernel_11_tmp[valid])
+         tropomi_data["column_averaging_kernel_12"] = np.append(tropomi_data["column_averaging_kernel_12"], column_averaging_kernel_12_tmp[valid])
+         tropomi_data["dfs"] = np.append(tropomi_data["dfs"], dfs_tmp[valid])
+         tropomi_data["dfs_aerosol"] = np.append(tropomi_data["dfs_aerosol"], dfs_aerosol_tmp[valid])
+         tropomi_data["dfs_methane"] = np.append(tropomi_data["dfs_methane"], dfs_methane_tmp[valid])
+
+    # ds = xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/GEOLOCATIONS")
+        with xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/GEOLOCATIONS") as ds: # (4)
+         soz = np.squeeze(ds["solar_zenith_angle"].values) # degree
+         soa = np.squeeze(ds["solar_azimuth_angle"].values)
+         saz = np.squeeze(ds["viewing_zenith_angle"].values)
+         saa = np.squeeze(ds["viewing_azimuth_angle"].values)
+
+         soz_tmp = soz.ravel(order='C')
+         soa_tmp = soa.ravel(order='C')
+         saz_tmp = saz.ravel(order='C')
+         saa_tmp = saa.ravel(order='C')
+
+         tropomi_data["soz"] = np.append(tropomi_data["soz"], soz_tmp[valid]) 
+         tropomi_data["soa"] = np.append(tropomi_data["soa"], soa_tmp[valid]) 
+         tropomi_data["saz"] = np.append(tropomi_data["saz"], saz_tmp[valid]) 
+         tropomi_data["saa"] = np.append(tropomi_data["saa"], saa_tmp[valid]) 
+
+
+    # ds = xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/INPUT_DATA")
+        with xr.open_dataset(filename, group="PRODUCT/SUPPORT_DATA/INPUT_DATA") as ds: # (7)
+         dry_air_subcolumns = np.squeeze(ds["dry_air_subcolumns"].values) # unit: mol m-2,12 layers, mole_content_of_dry_air_in_atmosphere_layer
+         dry_air_subcolumn_1 = dry_air_subcolumns[:,:,0]
+         dry_air_subcolumn_2 = dry_air_subcolumns[:,:,1]
+         dry_air_subcolumn_3 = dry_air_subcolumns[:,:,2]
+         dry_air_subcolumn_4 = dry_air_subcolumns[:,:,3]
+         dry_air_subcolumn_5 = dry_air_subcolumns[:,:,4]
+         dry_air_subcolumn_6 = dry_air_subcolumns[:,:,5]
+         dry_air_subcolumn_7 = dry_air_subcolumns[:,:,6]
+         dry_air_subcolumn_8 = dry_air_subcolumns[:,:,7]
+         dry_air_subcolumn_9 = dry_air_subcolumns[:,:,8]
+         dry_air_subcolumn_10 = dry_air_subcolumns[:,:,9]
+         dry_air_subcolumn_11 = dry_air_subcolumns[:,:,10]
+         dry_air_subcolumn_12 = dry_air_subcolumns[:,:,11]
+         methane_profile = np.squeeze(ds["methane_profile_apriori"].values) # unit: mol m-2, 12 layers, mole content of methane in atmosphere layer
+         methane_profile_1 = methane_profile[:,:,0] 
+         methane_profile_2 = methane_profile[:,:,1] 
+         methane_profile_3 = methane_profile[:,:,2] 
+         methane_profile_4 = methane_profile[:,:,3] 
+         methane_profile_5 = methane_profile[:,:,4] 
+         methane_profile_6 = methane_profile[:,:,5] 
+         methane_profile_7 = methane_profile[:,:,6] 
+         methane_profile_8 = methane_profile[:,:,7] 
+         methane_profile_9 = methane_profile[:,:,8] 
+         methane_profile_10 = methane_profile[:,:,9] 
+         methane_profile_11 = methane_profile[:,:,10] 
+         methane_profile_12 = methane_profile[:,:,11] 
+         methane_strong_column = np.squeeze(ds["methane_strong_twoband_total_column"].values) # Vertically integrated CH4 column from strong band
+         methane_weak_column = np.squeeze(ds["methane_weak_twoband_total_column"].values) # Vertically integrated CH4 column from weak band
+         u10 = np.squeeze(ds["eastward_wind"].values) # unit: m s-1
+         v10 = np.squeeze(ds["northward_wind"].values) # unit: m s-1
+         pres_interval = np.squeeze(ds["pressure_interval"].values) # unit:Pa, pressure difference between levels in the retrieval
+         cirrus_ref_nir = np.squeeze(ds["reflectance_cirrus_VIIRS_NIR"].values) # unit: 1
+         cirrus_ref_swir = np.squeeze(ds["reflectance_cirrus_VIIRS_SWIR"].values) # unit: 1
+         alt = np.squeeze(ds["surface_altitude"].values) # [m]
+         lc = np.squeeze(ds["surface_classification"].values)
+ 
+
+        methane_profile_avg = np.mean(methane_profile, axis=2) # calculate column average
+        # print(methane_profile_avg.shape)
+
+        dry_air_subcolumn_1_tmp = dry_air_subcolumn_1.ravel(order='C')
+        dry_air_subcolumn_2_tmp = dry_air_subcolumn_2.ravel(order='C')
+        dry_air_subcolumn_3_tmp = dry_air_subcolumn_3.ravel(order='C')
+        dry_air_subcolumn_4_tmp = dry_air_subcolumn_4.ravel(order='C')
+        dry_air_subcolumn_5_tmp = dry_air_subcolumn_5.ravel(order='C')
+        dry_air_subcolumn_6_tmp = dry_air_subcolumn_6.ravel(order='C')
+        dry_air_subcolumn_7_tmp = dry_air_subcolumn_7.ravel(order='C')
+        dry_air_subcolumn_8_tmp = dry_air_subcolumn_8.ravel(order='C')
+        dry_air_subcolumn_9_tmp = dry_air_subcolumn_9.ravel(order='C')
+        dry_air_subcolumn_10_tmp = dry_air_subcolumn_10.ravel(order='C')
+        dry_air_subcolumn_11_tmp = dry_air_subcolumn_11.ravel(order='C')
+        dry_air_subcolumn_12_tmp = dry_air_subcolumn_12.ravel(order='C')
+        methane_profile_avg_tmp = methane_profile_avg.ravel(order='C')
+        methane_profile_1_tmp = methane_profile_1.ravel(order='C')
+        methane_profile_2_tmp = methane_profile_2.ravel(order='C')
+        methane_profile_3_tmp = methane_profile_3.ravel(order='C')
+        methane_profile_4_tmp = methane_profile_4.ravel(order='C')
+        methane_profile_5_tmp = methane_profile_5.ravel(order='C')
+        methane_profile_6_tmp = methane_profile_6.ravel(order='C')
+        methane_profile_7_tmp = methane_profile_7.ravel(order='C')
+        methane_profile_8_tmp = methane_profile_8.ravel(order='C')
+        methane_profile_9_tmp = methane_profile_9.ravel(order='C')
+        methane_profile_10_tmp = methane_profile_10.ravel(order='C')
+        methane_profile_11_tmp = methane_profile_11.ravel(order='C')
+        methane_profile_12_tmp = methane_profile_12.ravel(order='C')
+        methane_strong_column_tmp = methane_strong_column.ravel(order='C')
+        methane_weak_column_tmp = methane_weak_column.ravel(order='C')
+        u10_tmp = u10.ravel(order='C')
+        v10_tmp = v10.ravel(order='C')
+        pres_interval_tmp = pres_interval.ravel(order='C')
+        cirrus_ref_nir_tmp = cirrus_ref_nir.ravel(order='C')
+        cirrus_ref_swir_tmp = cirrus_ref_swir.ravel(order='C')
+        alt_tmp = alt.ravel(order='C')
+        lc_tmp = lc.ravel(order='C')
+
+        tropomi_data["dry_air_subcolumn_1"] = np.append(tropomi_data["dry_air_subcolumn_1"], dry_air_subcolumn_1_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_2"] = np.append(tropomi_data["dry_air_subcolumn_2"], dry_air_subcolumn_2_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_3"] = np.append(tropomi_data["dry_air_subcolumn_3"], dry_air_subcolumn_3_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_4"] = np.append(tropomi_data["dry_air_subcolumn_4"], dry_air_subcolumn_4_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_5"] = np.append(tropomi_data["dry_air_subcolumn_5"], dry_air_subcolumn_5_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_6"] = np.append(tropomi_data["dry_air_subcolumn_6"], dry_air_subcolumn_6_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_7"] = np.append(tropomi_data["dry_air_subcolumn_7"], dry_air_subcolumn_7_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_8"] = np.append(tropomi_data["dry_air_subcolumn_8"], dry_air_subcolumn_8_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_9"] = np.append(tropomi_data["dry_air_subcolumn_9"], dry_air_subcolumn_9_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_10"] = np.append(tropomi_data["dry_air_subcolumn_10"], dry_air_subcolumn_10_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_11"] = np.append(tropomi_data["dry_air_subcolumn_11"], dry_air_subcolumn_11_tmp[valid]) 
+        tropomi_data["dry_air_subcolumn_12"] = np.append(tropomi_data["dry_air_subcolumn_12"], dry_air_subcolumn_12_tmp[valid]) 
+        tropomi_data["methane_profile_avg"] = np.append(tropomi_data["methane_profile_avg"], methane_profile_avg_tmp[valid]) 
+        tropomi_data["methane_profile_1"] = np.append(tropomi_data["methane_profile_1"], methane_profile_1_tmp[valid]) 
+        tropomi_data["methane_profile_2"] = np.append(tropomi_data["methane_profile_2"], methane_profile_2_tmp[valid]) 
+        tropomi_data["methane_profile_3"] = np.append(tropomi_data["methane_profile_3"], methane_profile_3_tmp[valid]) 
+        tropomi_data["methane_profile_4"] = np.append(tropomi_data["methane_profile_4"], methane_profile_4_tmp[valid]) 
+        tropomi_data["methane_profile_5"] = np.append(tropomi_data["methane_profile_5"], methane_profile_5_tmp[valid]) 
+        tropomi_data["methane_profile_6"] = np.append(tropomi_data["methane_profile_6"], methane_profile_6_tmp[valid]) 
+        tropomi_data["methane_profile_7"] = np.append(tropomi_data["methane_profile_7"], methane_profile_7_tmp[valid]) 
+        tropomi_data["methane_profile_8"] = np.append(tropomi_data["methane_profile_8"], methane_profile_8_tmp[valid]) 
+        tropomi_data["methane_profile_9"] = np.append(tropomi_data["methane_profile_9"], methane_profile_9_tmp[valid]) 
+        tropomi_data["methane_profile_10"] = np.append(tropomi_data["methane_profile_10"], methane_profile_10_tmp[valid]) 
+        tropomi_data["methane_profile_11"] = np.append(tropomi_data["methane_profile_11"], methane_profile_11_tmp[valid]) 
+        tropomi_data["methane_profile_12"] = np.append(tropomi_data["methane_profile_12"], methane_profile_12_tmp[valid]) 
+        tropomi_data["methane_strong_column"] = np.append(tropomi_data["methane_strong_column"], methane_strong_column_tmp[valid]) 
+        tropomi_data["methane_weak_column"] = np.append(tropomi_data["methane_weak_column"], methane_weak_column_tmp[valid]) 
+        tropomi_data["u10"] = np.append(tropomi_data["u10"], u10_tmp[valid]) 
+        tropomi_data["v10"] = np.append(tropomi_data["v10"], v10_tmp[valid]) 
+        tropomi_data["pres_interval"] = np.append(tropomi_data["pres_interval"], pres_interval_tmp[valid]) 
+        tropomi_data["cirrus_ref_nir"] = np.append(tropomi_data["cirrus_ref_nir"], cirrus_ref_nir_tmp[valid]) 
+        tropomi_data["cirrus_ref_swir"] = np.append(tropomi_data["cirrus_ref_swir"], cirrus_ref_swir_tmp[valid]) 
+        tropomi_data["alt"] = np.append(tropomi_data["alt"], alt_tmp[valid]) 
+        tropomi_data["lc"] = np.append(tropomi_data["lc"], lc_tmp[valid])        
+
+        t2 = time.time()
+        print(f"Finished processing {filename} in {t2 - t1:.2f} seconds")
+
+        return tropomi_data  # Return the extracted data
+
+    except Exception as e:
+        print(f"Error processing file {filename}: {e}")
+        return None  # Return None if there's an error
+
+######################################################################################
+##########    """Save the extracted data to an HDF5 file."""    ######################
+
+def save_to_hdf5(data, filepath):
+
+    with h5py.File(filepath, 'w') as h5f:
+        for key, value in data.items():
+            # Convert the time to a fixed-length string format for storage
+            if key == "time":
+                value = np.array(value, dtype='S19')  # 'YYYY-MM-DD HH:MM:SS' is 19 characters
+            h5f.create_dataset(key, data=value)
+            
+    print(f"Saved data to {filepath}")
+
+def process_month(year, month):
+
+    files = sorted(glob.glob(os.path.join(path_raw2, f'TROPOMI/00raw/CH4/*___{year}{month:02d}*.nc')))
+    if not files:
+        print(f"No files found for {year}-{month:02d}")
+        return
+
+    # print(f'Processing {len(files)} files for {year}-{month:02d}')
+
+############## Initialize combined data dictionary  #################
+
+    first_file_data = process_file(files[0])
+    if first_file_data is None:
+        print(f"Skipping month {year}-{month:02d} due to processing error in the first file.")
+        return
+
+    combined_data = {key: np.array([]) for key in first_file_data.keys()}
+
+    for file in files:
+        file_data = process_file(file)
+        if file_data is None:
+            print(f"Skipping file {file} due to an error.")
+            continue  # Skip problematic files
+
+        for key in combined_data:
+            combined_data[key] = np.concatenate((combined_data[key], file_data[key]))
+
+####### Save combined data     ###########################################
+    output_path = os.path.join(save_path, f'TROPOMI_CH4_QC_{year}_{month:02d}.h5')
+    save_to_hdf5(combined_data, output_path)
+    print(f'Saved processed data to {output_path}')
+
+if __name__ == "__main__":
+    
+    year = 2020
+    for month in range(1, 2):                 ## Process all months (1–2)
+        process_month(year, month)
