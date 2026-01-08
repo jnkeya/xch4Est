@@ -1,0 +1,155 @@
+
+##"""@yixi"""
+##________Date : 2025/09/07
+## Global Fused XCH₄ Mapping (Daily, Monthly, Yearly)
+
+
+
+import os, h5py, numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs, cartopy.feature as cfeature
+import scipy.io as sio
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+
+
+# ===== CONFIG =====
+YEAR       = 2023
+MONTH      = 7
+DAY        = "20230715"   # daily test date
+data_root  = f"/share/air-3/XCH4_Estimation/data/Fused_XCH4_{YEAR}"
+
+GLOBAL_EXTENT = (-180, 180, -60, 80)
+VMIN, VMAX = 1800, 1940   # fixed colorbar
+
+# ===== LOAD LANDMASK =====
+grid_path = "/share/air-3/XCH4_Estimation/data/grid/grid_TROPOMI_01degree_landmask.mat"
+landmask  = sio.loadmat(grid_path)["landmask"].astype(float)
+landmask[landmask == 0] = np.nan
+total_land_pixels = np.sum(~np.isnan(landmask))
+
+
+# ===== Plot helper =====
+def plot_map(lon, lat, data, title, cov):
+    fig = plt.figure(figsize=(12, 6), dpi=300 )
+    ax  = plt.axes(projection=ccrs.PlateCarree())
+    ax.set_extent(GLOBAL_EXTENT)
+
+    im = ax.pcolormesh(lon, lat, data, cmap="jet", vmin=VMIN, vmax=VMAX, shading="auto")
+    ax.coastlines(linewidth=0.8)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.add_feature(cfeature.LAND, facecolor="white", zorder=0)
+
+    # Axis ticks: show N/S/E/W labels
+    xticks = np.arange(-180, 181, 60)
+    yticks = np.arange(-60, 81, 20)
+    ax.set_xticks(np.arange(-180, 181, 60), crs=ccrs.PlateCarree())
+    ax.set_yticks(np.arange(-60, 81, 20), crs=ccrs.PlateCarree())
+    lon_labels = [f"{abs(x)}°W" if x < 0 else (f"{x}°E" if x > 0 else "0°") for x in np.arange(-180, 181, 60)]
+    lat_labels = [f"{abs(y)}°S" if y < 0 else (f"{y}°N" if y > 0 else "0°") for y in np.arange(-60, 81, 20)]
+    ax.set_xticklabels(lon_labels, fontsize=10,)
+    ax.set_yticklabels(lat_labels, fontsize=10, )
+    
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=False,
+                      linewidth=0.3, 
+                      color="gray", 
+                      alpha=0.45,   
+                      linestyle="--")
+    
+    gl.xlocator = plt.FixedLocator(xticks)
+    gl.ylocator = plt.FixedLocator(yticks)
+
+    # Title
+    ax.set_title(title, fontsize=15, weight="bold")
+
+    # Coverage text
+    ax.text(-170, -40, f"Coverage: {cov:.2f}%", fontsize=11, weight="bold",
+            bbox=dict(facecolor="white", edgecolor="black", alpha=0.85),
+            transform=ccrs.PlateCarree())
+
+    # Vertical colorbar   /// 
+    cb = plt.colorbar(im, ax=ax,
+                      orientation="vertical", 
+                      pad=0.02,          
+                      fraction=0.04,      
+                      shrink=0.7)         
+    cb.set_label("Fused XCH₄ (ppb)", fontsize=12, weight="bold") 
+
+    plt.show()
+
+# ===== DAILY MAP =====
+def plot_daily(day_str):
+    fpath = os.path.join(data_root, f"fused_xch4_{day_str}.h5")
+    if not os.path.exists(fpath):
+        print(f"⚠️ Missing {fpath}")
+        return
+    with h5py.File(fpath, "r") as f:
+        lon = f["lon_tp"][:]
+        lat = f["lat_tp"][:]
+        data = f["fused_xch4"][:]
+        cov  = f["coverage_fused"][()]
+    date_fmt = pd.to_datetime(day_str).strftime("%-d %b, %Y")
+    title = f"Global Fused XCH₄ : Daily ({date_fmt})"
+    plot_map(lon, lat, data, title, cov)
+
+# ===== MONTHLY MEAN MAP =====
+def plot_monthly(year, month):
+    in_folder = os.path.join(data_root)
+    sum_map = count_map = None
+    lon = lat = None
+    for d in pd.date_range(f"{year}{month:02}01", f"{year}{month:02}{pd.Period(f'{year}-{month}').days_in_month}"):
+        day_str = d.strftime("%Y%m%d")
+        fpath = os.path.join(in_folder, f"fused_xch4_{day_str}.h5")
+        if not os.path.exists(fpath):
+            continue
+        with h5py.File(fpath, "r") as f:
+            if lon is None:
+                lon, lat = f["lon_tp"][:], f["lat_tp"][:]
+                sum_map = np.zeros_like(lon, dtype=np.float32)
+                count_map = np.zeros_like(lon, dtype=np.uint16)
+            data = f["fused_xch4"][:]
+            mask = np.isfinite(data)
+            sum_map[mask] += data[mask]
+            count_map[mask] += 1
+    mean_map = np.full_like(sum_map, np.nan, dtype=np.float32)
+    v = count_map > 0
+    mean_map[v] = sum_map[v] / count_map[v]
+    # cov = 100.0 * np.count_nonzero(np.isfinite(mean_map)) / mean_map.size
+    cov = 100.0 * np.count_nonzero(np.isfinite(mean_map) & ~np.isnan(landmask)) / total_land_pixels
+    month_name = pd.to_datetime(f"{year}{month:02}01").strftime("%b, %Y")
+    title = f"Global Fused XCH₄ : Monthly mean ({month_name})"
+    plot_map(lon, lat, mean_map, title, cov)
+
+# ===== YEARLY MEAN MAP =====
+def plot_yearly(year):
+    in_folder = os.path.join(data_root)
+    sum_map = count_map = None
+    lon = lat = None
+    for d in pd.date_range(f"{year}0101", f"{year}1231"):
+        day_str = d.strftime("%Y%m%d")
+        fpath = os.path.join(in_folder, f"fused_xch4_{day_str}.h5")
+        if not os.path.exists(fpath):
+            continue
+        with h5py.File(fpath, "r") as f:
+            if lon is None:
+                lon, lat = f["lon_tp"][:], f["lat_tp"][:]
+                sum_map = np.zeros_like(lon, dtype=np.float32)
+                count_map = np.zeros_like(lon, dtype=np.uint16)
+            data = f["fused_xch4"][:]
+            mask = np.isfinite(data)
+            sum_map[mask] += data[mask]
+            count_map[mask] += 1
+    mean_map = np.full_like(sum_map, np.nan, dtype=np.float32)
+    v = count_map > 0
+    mean_map[v] = sum_map[v] / count_map[v]
+    # cov = 100.0 * np.count_nonzero(np.isfinite(mean_map)) / mean_map.size
+    cov = 100.0 * np.count_nonzero(np.isfinite(mean_map) & ~np.isnan(landmask)) / total_land_pixels
+    title = f"Global Fused XCH₄ : Annual mean ({year})"
+    plot_map(lon, lat, mean_map, title, cov)
+
+# ===== RUN =====
+plot_daily(DAY)               # 1) Daily
+
+plot_monthly(YEAR, MONTH)     # 2) Monthly
+
+plot_yearly(YEAR)             # 3) Yearly
