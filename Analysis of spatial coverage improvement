@@ -1,0 +1,316 @@
+"""
+ROI Analysis for Methane (XCH4) Estimation
+
+Author: Yixi
+Date: 2025-01-07
+
+Description:
+    Analysis of spatial coverage improvement and bias reduction comparing
+    TROPOMI and fused satellite products across selected global Regions
+    of Interest (ROIs).
+"""
+
+import os
+import scipy.io as sio
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch, Rectangle
+from matplotlib.lines import Line2D
+
+# ============================================================
+# 1. Configuration and Constants
+# ============================================================
+
+DATA_DIR = "/share/air-3/XCH4_Estimation/Fused_XCH4_analysis/Global_xch4/Data_Complete/Annual"
+OUTPUT_DIR = "/share/air-3/XCH4_Estimation/Fused_XCH4_analysis/Global_xch4/Data_Complete"
+GRID_PATH = "/share/air-3/XCH4_Estimation/data/grid/grid_TROPOMI_01degree_landmask.mat"
+
+YEARS = [2020, 2021, 2022, 2023]
+
+# ------------------------------------------------------------
+# Regions of Interest (ROIs)
+# ------------------------------------------------------------
+ROIS = {
+    "A": {"extent": [95, 105, 20, 30], "label": "South Asia",
+          "full_label": "A: South Asia (20°N-30°N, 95°E-105°E)"},
+    "B": {"extent": [110, 120, 50, 60], "label": "Eastern Siberia",
+          "full_label": "B: Eastern Siberia (50°N-60°N, 110°E-120°E)"},
+    "C": {"extent": [5, 15, 40, 50], "label": "Central Europe",
+          "full_label": "C: Central Europe (40°N-50°N, 5°E-15°E)"},
+    "D": {"extent": [-125, -115, 45, 55], "label": "Pacific Northwest",
+          "full_label": "D: Pacific Northwest (45°N-55°N, 125°W-115°W)"},
+    "E": {"extent": [-80, -70, -15, -5], "label": "Amazon Basin",
+          "full_label": "E: Amazon Basin (15°S-5°S, 80°W-70°W)"},
+}
+
+# ------------------------------------------------------------
+# Color Schemes
+# ------------------------------------------------------------
+COLORS = {
+    'Uncorrected': '#e74c3c',
+    'Official_BC': '#3498db',
+    'FUSED': '#2ecc71',
+}
+
+ROI_COLORS = {
+    'A': "#b36b63",     # South Asia
+    'B': "#b6aedf",     # Eastern Siberia
+    'C': "#abe3a7de",   # Central Europe
+    'D': "#fad53e",     # Pacific Northwest
+    'E': "#73bed6",     # Amazon Basin
+}
+
+# ============================================================
+# 2. Data Processing Functions
+# ============================================================
+
+def get_roi_mask(lon, lat, extent):
+    """
+    Create a boolean mask for a given ROI.
+
+    Parameters
+    ----------
+    lon : ndarray
+        Longitude grid.
+    lat : ndarray
+        Latitude grid.
+    extent : list
+        ROI extent [lon_min, lon_max, lat_min, lat_max].
+
+    Returns
+    -------
+    ndarray
+        Boolean mask corresponding to the ROI.
+    """
+    lonmin, lonmax, latmin, latmax = extent
+    return (lon >= lonmin) & (lon <= lonmax) & (lat >= latmin) & (lat <= latmax)
+
+results = []
+
+print("\n" + "=" * 100)
+print("ROI ANALYSIS - SPATIAL COVERAGE & BIAS (NEW MAT FILES)")
+print("=" * 100)
+
+# ============================================================
+# 3. ROI-Level Analysis Loop
+# ============================================================
+
+for year in YEARS:
+    print(f"\n{'=' * 50}")
+    print(f"Processing {year}")
+    print(f"{'=' * 50}")
+
+    mat_file = f"{DATA_DIR}/Global_XCH4_{year}.mat"
+    data = sio.loadmat(mat_file)
+
+    lat = data['lat_tp']
+    lon = data['lon_tp']
+    landmask = data['landmask']
+
+    for roi_code, roi_config in ROIS.items():
+        extent = roi_config['extent']
+        label = roi_config['label']
+
+        mask = get_roi_mask(lon, lat, extent)
+        land_mask = mask & ~np.isnan(landmask)
+        total_cells = land_mask.sum()
+
+        if total_cells == 0:
+            print(f"  ⚠️ ROI-{roi_code} ({label}): No land data")
+            continue
+
+        # ----------------------------------------------------
+        # Spatial Coverage Calculation
+        # ----------------------------------------------------
+        tropomi_bc_xch4 = data['TROPOMI_Official_BC_mean'][land_mask]
+        fused_xch4 = data['fused_mean'][land_mask]
+
+        tropomi_cells_with_data = np.sum(np.isfinite(tropomi_bc_xch4))
+        fused_cells_with_data = np.sum(np.isfinite(fused_xch4))
+
+        tropomi_spatial_cov = (tropomi_cells_with_data / total_cells) * 100
+        fused_spatial_cov = (fused_cells_with_data / total_cells) * 100
+
+        improve_pp = fused_spatial_cov - tropomi_spatial_cov
+        improve_rel = (improve_pp / tropomi_spatial_cov) * 100 if tropomi_spatial_cov > 0 else 0
+
+        # ----------------------------------------------------
+        # Bias Analysis
+        # ----------------------------------------------------
+        tropomi_uncorr_bias = np.nanmean(data['bias_uncorr'][land_mask])
+        tropomi_bc_bias = np.nanmean(data['bias_bc'][land_mask])
+        fused_bias = np.nanmean(data['bias_fused'][land_mask])
+
+        bias_reduction_uncorr = tropomi_uncorr_bias - fused_bias
+        bias_reduction_bc = tropomi_bc_bias - fused_bias
+
+        print(
+            f"  ROI-{roi_code} ({label:20s}): "
+            f"TROPOMI: {tropomi_spatial_cov:5.1f}% → FUSED: {fused_spatial_cov:5.1f}% "
+            f"(+{improve_pp:4.2f}pp, +{improve_rel:4.1f}%) | "
+            f"Bias: {tropomi_uncorr_bias:+6.2f}→{fused_bias:+6.2f}ppb"
+        )
+
+        results.append({
+            'Year': year,
+            'ROI': roi_code,
+            'Region': label,
+            'Full_Label': roi_config['full_label'],
+            'TROPOMI_Spatial_Cov_%': tropomi_spatial_cov,
+            'FUSED_Spatial_Cov_%': fused_spatial_cov,
+            'Abs_Improve_pp': improve_pp,
+            'Rel_Improve_%': improve_rel,
+            'TROP_Uncorr_Bias': tropomi_uncorr_bias,
+            'TROP_BC_Bias': tropomi_bc_bias,
+            'FUSED_Bias': fused_bias,
+            'Bias_Reduction_Uncorr': bias_reduction_uncorr,
+            'Bias_Reduction_BC': bias_reduction_bc,
+        })
+
+df = pd.DataFrame(results)
+df.to_csv(f"{OUTPUT_DIR}/ROI_Spatial_Coverage_Analysis_NEW.csv", index=False)
+
+# ============================================================
+# 4. Visualization
+# ============================================================
+
+def plot_figure(df, output_path):
+    """
+    Generate the final ROI analysis figure for a selected year.
+    """
+    df_plot = df[df['Year'] == 2023].sort_values('ROI')
+
+    plt.rcParams["figure.dpi"] = 300  # Standard resolution for documentation
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(3, 2, height_ratios=[0.1, 1, 0.2], hspace=0.35, wspace=0.25)
+
+# ------------------------------------------------------------
+# 2023 Data Preparation
+# ------------------------------------------------------------
+df_2023 = df[df['Year'] == 2023].copy()
+df_2023 = df_2023.sort_values('ROI')
+
+roi_codes = [f"ROI-{row['ROI']}" for _, row in df_2023.iterrows()]
+x = np.arange(len(roi_codes))
+bar_colors = [ROI_COLORS[row['ROI']] for _, row in df_2023.iterrows()]
+
+# ------------------------------------------------------------
+# Panel (a): Coverage Enhancement
+# ------------------------------------------------------------
+ax1 = fig.add_subplot(gs[1, 0])
+ax1_twin = ax1.twinx()
+
+bars = ax1.bar(
+    x, df_2023['Abs_Improve_pp'].values,
+    color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.5
+)
+
+line = ax1_twin.plot(
+    x, df_2023['Rel_Improve_%'].values, 'o-',
+    color='#d62728', linewidth=3.5, markersize=13,
+    markeredgecolor='black', markeredgewidth=1.5
+)
+
+ax1.set_ylabel('Coverage Improvement\n(percentage points)', fontsize=17, fontweight='bold')
+ax1_twin.set_ylabel('Relative Improvement (%)', fontsize=17, fontweight='bold', color='#d62728')
+ax1.set_title('(a) Coverage Enhancement', fontsize=19, fontweight='bold', pad=15)
+ax1.set_xticks(x)
+ax1.set_xticklabels(roi_codes, fontsize=15, fontweight='bold')
+ax1.grid(axis='y', alpha=0.3, linestyle='--', linewidth=1)
+ax1.tick_params(labelsize=14)
+ax1_twin.tick_params(axis='y', labelcolor='#d62728', labelsize=14)
+ax1.set_ylim(0, 5.0)
+
+for i, val in enumerate(df_2023['Abs_Improve_pp'].values):
+    ax1.text(
+        i, val + 0.12, f'+{val:.2f}pp',
+        ha='center', va='bottom', fontsize=12, fontweight='bold'
+    )
+
+bar_legend = Rectangle((0, 0), 1, 1, facecolor='white', edgecolor='black', linewidth=1.5)
+line_legend = Line2D([0], [0], color='#d62728', linewidth=3, marker='o', markersize=10)
+
+ax1.legend(
+    [bar_legend, line_legend],
+    ['Absolute (pp)', 'Relative (%)'],
+    loc='upper right', fontsize=14,
+    framealpha=0.95, edgecolor='black',
+    fancybox=False, frameon=True
+)
+
+# ------------------------------------------------------------
+# Panel (b): Bias Reduction
+# ------------------------------------------------------------
+ax2 = fig.add_subplot(gs[1, 1])
+
+width = 0.25
+ax2.bar(x - width, df_2023['TROP_Uncorr_Bias'].values, width,
+        label='TROPOMI Uncorrected', color=COLORS['Uncorrected'],
+        edgecolor='black', linewidth=1.2)
+ax2.bar(x, df_2023['TROP_BC_Bias'].values, width,
+        label='TROPOMI Official BC', color=COLORS['Official_BC'],
+        edgecolor='black', linewidth=1.2)
+ax2.bar(x + width, df_2023['FUSED_Bias'].values, width,
+        label='FUSED', color=COLORS['FUSED'],
+        edgecolor='black', linewidth=1.2)
+
+ax2.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.7)
+ax2.axhspan(-5, 5, alpha=0.1, color='green', zorder=0)
+ax2.text(0.02, 0.98, '±5 ppb', transform=ax2.transAxes,
+         fontsize=12, color='green', fontweight='bold', va='top')
+
+ax2.set_ylabel('Bias vs GOSAT-2 Reference (ppb)', fontsize=17, fontweight='bold')
+ax2.set_title('(b) Bias Reduction by Region', fontsize=19, fontweight='bold', pad=15)
+ax2.set_xticks(x)
+ax2.set_xticklabels(roi_codes, fontsize=15, fontweight='bold')
+ax2.grid(axis='y', alpha=0.3, linestyle='--', linewidth=1)
+ax2.tick_params(labelsize=14)
+
+ax2.legend(fontsize=14, loc='lower left',
+           framealpha=0.95, edgecolor='black',
+           fancybox=False, frameon=True)
+
+# ------------------------------------------------------------
+# ROI Legend (Bottom Panel)
+# ------------------------------------------------------------
+ax_legend = fig.add_subplot(gs[2, :])
+ax_legend.axis('off')
+
+SHORT_LABELS = {
+    'ROI-A': r'$\mathbf{A}$: South Asia',
+    'ROI-B': r'$\mathbf{B}$: Eastern Siberia',
+    'ROI-C': r'$\mathbf{C}$: Central Europe',
+    'ROI-D': r'$\mathbf{D}$: Pacific Northwest',
+    'ROI-E': r'$\mathbf{E}$: Amazon Basin'
+}
+
+legend_entries = [
+    Patch(facecolor=ROI_COLORS[roi], edgecolor='black', linewidth=1.5,
+          label=SHORT_LABELS[f'ROI-{roi}'])
+    for roi in ['A', 'B', 'C', 'D', 'E']
+]
+
+legend = ax_legend.legend(
+    handles=legend_entries,
+    loc='center',
+    ncol=5,
+    fontsize=17,
+    frameon=True,
+    fancybox=False,
+    edgecolor='black',
+    framealpha=0.95,
+    columnspacing=2.0,
+    handlelength=2.5,
+    handletextpad=1.0,
+    title='Regions of Interest (ROI)',
+    title_fontsize=20,
+    borderpad=1.0
+)
+
+legend.get_title().set_fontweight('bold')
+
+plt.savefig(f"{OUTPUT_DIR}/Fig_ROI_Analysis_FINAL.png", dpi=600, bbox_inches='tight')
+print(f"✅ Saved: Fig_ROI_Analysis_FINAL.png")
+plt.show()
+plt.close()
